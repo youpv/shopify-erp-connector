@@ -1,49 +1,33 @@
-# Shopify ERP Connector
+# Shopify ERP Connector (Async Rewrite)
 
-This application serves as a connector between custom ERP systems and the Shopify GraphQL Admin API.
+This rewrite provides a minimal stateless backend for syncing products between a custom ERP and Shopify using modern asynchronous queues and PostgreSQL storage.
 
-## Prerequisites
+## Features
 
-* Node.js (v18+ recommended)
-* npm
-* Access to a PostgreSQL database
-* Shopify Partner account and a development/custom app with API credentials
-* FTP server access details (if applicable for ERP integration)
+- **ES modules (Node.js)**
+- **BullMQ** queue backed by Redis for scalable task processing
+- **PostgreSQL** for configuration and log storage
+- **Shopify GraphQL bulk operations** for efficient product updates
 
 ## Setup
 
-1. Clone the repository:
-   ```bash
-   git clone <your-repo-url>
-   cd shopify-erp-connector
-   ```
-
-2. Install dependencies:
+1. Install dependencies
    ```bash
    npm install
    ```
+2. Create a `.env` file based on `.env.example` and fill in database, Redis and Shopify credentials.
+3. Start the server
+   ```bash
+   npm start
+   ```
 
-3. Set up environment variables:
-   * Copy `.env.example` to `.env`:
-     ```bash
-     cp .env.example .env
-     ```
-   * Edit the `.env` file and fill in your specific credentials and configurations for Shopify, PostgreSQL, and FTP.
+### API Endpoints
 
-## Running the Application
+- `POST /sync/:id` – queue a product sync job for the configuration ID.
+- `GET /configs` – list product sync configurations.
+- `POST /configs` – create a configuration.
+- `GET /configs/:id` – get a configuration.
+- `PUT /configs/:id` – update a configuration.
+- `DELETE /configs/:id` – remove a configuration.
 
-* **Development Mode (with auto-restart):**
-  ```bash
-  npm run dev
-  ```
-
-* **Production Mode:**
-  ```bash
-  npm start
-  ```
-
-The server will typically start on port 3000 (or the port specified in your `.env` file).
-
-## API Endpoints
-
-* **POST /api/products/sync**: Initiates the product synchronization process (currently a placeholder). 
+A worker is started in the same process to process queued jobs.
