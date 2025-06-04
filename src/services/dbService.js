@@ -19,7 +19,7 @@ class DatabaseService {
   // Get FTP configuration from database
   async getFtpConfig() {
     try {
-      const { rows } = await db.query('SELECT host, username, password, port FROM ftp_config LIMIT 1');
+      const { rows } = await db.query('SELECT host, username, password, port, timeout FROM ftp_config LIMIT 1');
       if (rows.length === 0) {
         throw new Error('FTP configuration not found in database');
       }
@@ -28,6 +28,7 @@ class DatabaseService {
         user: rows[0].username,
         password: rows[0].password,
         port: rows[0].port || 21,
+        timeout: rows[0].timeout,
       };
     } catch (error) {
         logger.error('Error fetching FTP config from database:', error);

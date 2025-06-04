@@ -51,4 +51,11 @@ router.delete('/configs/:id', productController.deleteConfiguration);
  */
 router.get('/configs/:id/logs', productController.getSyncLogs);
 
+/**
+ * @route   POST /api/products/cleanup-duplicates
+ * @desc    Clean up duplicate products in Shopify based on SKU
+ * @access  Private
+ */
+router.post('/cleanup-duplicates', productController.cleanupDuplicates);
+
 module.exports = router; 

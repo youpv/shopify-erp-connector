@@ -191,6 +191,19 @@ const BULK_VARIANTS_CREATE = `
   }
 `;
 
+// Mutation to delete a product
+const DELETE_PRODUCT = `
+  mutation productDelete($input: ProductDeleteInput!) {
+    productDelete(input: $input) {
+      deletedProductId
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 module.exports = {
   STAGED_UPLOADS_CREATE,
   BULK_OPERATION_RUN_QUERY,
@@ -202,5 +215,6 @@ module.exports = {
   BULK_UPDATE_PRODUCT,
   BULK_PRODUCT_SET,
   BULK_PRODUCT_SET_MUTATION,
-  BULK_VARIANTS_CREATE
+  BULK_VARIANTS_CREATE,
+  DELETE_PRODUCT
 }; 

@@ -2,6 +2,8 @@ const ftp = require('basic-ftp');
 const dbService = require('./dbService');
 const logger = require('../utils/logger');
 
+const DEFAULT_FTP_TIMEOUT = 60000; // 60 seconds
+
 class FtpService {
   constructor() {
     // FTP config will be fetched from the database when needed
@@ -17,9 +19,10 @@ class FtpService {
   }
 
   async listFiles(remotePath = '/', customConfig = null) {
-    const client = new ftp.Client();
+    const config = customConfig || await this.getFtpConfig();
+    const timeout = config.timeout || DEFAULT_FTP_TIMEOUT;
+    const client = new ftp.Client(timeout);
     try {
-      const config = customConfig || await this.getFtpConfig();
       await client.access(config);
       logger.info(`FTP: Listing files in ${remotePath}`);
       return await client.list(remotePath);
@@ -32,9 +35,10 @@ class FtpService {
   }
 
   async downloadFile(remotePath, localPath, customConfig = null) {
-    const client = new ftp.Client();
+    const config = customConfig || await this.getFtpConfig();
+    const timeout = config.timeout || DEFAULT_FTP_TIMEOUT;
+    const client = new ftp.Client(timeout);
     try {
-      const config = customConfig || await this.getFtpConfig();
       await client.access(config);
       logger.info(`FTP: Downloading ${remotePath} to ${localPath}`);
       await client.downloadTo(localPath, remotePath);
@@ -48,9 +52,10 @@ class FtpService {
   }
 
   async uploadFile(localPath, remotePath, customConfig = null) {
-    const client = new ftp.Client();
+    const config = customConfig || await this.getFtpConfig();
+    const timeout = config.timeout || DEFAULT_FTP_TIMEOUT;
+    const client = new ftp.Client(timeout);
     try {
-      const config = customConfig || await this.getFtpConfig();
       await client.access(config);
       logger.info(`FTP: Uploading ${localPath} to ${remotePath}`);
       await client.uploadFrom(localPath, remotePath);

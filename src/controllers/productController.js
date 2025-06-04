@@ -1,5 +1,6 @@
 const productSyncService = require('../services/productSyncService');
 const dbService = require('../services/dbService');
+const logger = require('../utils/logger');
 
 class ProductController {
   /**
@@ -31,7 +32,6 @@ class ProductController {
       
       // Handle the sync process in the background
         syncPromise.catch(error => {
-          const logger = require('../utils/logger');
           logger.error('Background sync process error:', error);
         });
     } catch (error) {
@@ -165,7 +165,6 @@ class ProductController {
       
       // Handle the sync process in the background
       syncPromise.catch(error => {
-        const logger = require('../utils/logger');
         logger.error(`Background sync process error for new config ${newConfig.id}:`, error);
       });
       
@@ -237,6 +236,30 @@ class ProductController {
         message: 'Configuration deleted successfully'
       });
     } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Clean up duplicate products in Shopify
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   * @param {Function} next - Express next middleware function
+   */
+  async cleanupDuplicates(req, res, next) {
+    try {
+      logger.info('Manual duplicate cleanup requested');
+      
+      // Start the cleanup process
+      const cleanupStats = await productSyncService.cleanupDuplicateProducts();
+      
+      res.status(200).json({
+        success: true,
+        message: `Cleanup completed. Removed ${cleanupStats.productsDeleted} duplicate products.`,
+        stats: cleanupStats
+      });
+    } catch (error) {
+      logger.error('Error during manual duplicate cleanup:', error);
       next(error);
     }
   }
