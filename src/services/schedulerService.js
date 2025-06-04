@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const dbService = require('./dbService');
 const productSyncService = require('./productSyncService');
 const { dbLimiter } = require('../utils/rateLimiters');
+const logger = require('../utils/logger');
 
 /**
  * Service to handle scheduling of sync jobs based on configuration frequencies
@@ -19,15 +20,15 @@ class SchedulerService {
    */
   async initialize() {
     if (this.initialized) {
-      console.log('Scheduler already initialized');
+      logger.info('Scheduler already initialized');
       return;
     }
 
-    console.log('Initializing scheduler service...');
+    logger.info('Initializing scheduler service...');
     
     // Check for configs every hour
     cron.schedule('0 * * * *', async () => {
-      console.log('Scheduler: Running hourly check for sync jobs');
+      logger.info('Scheduler: Running hourly check for sync jobs');
       await this.checkAndScheduleSyncs();
     });
     
@@ -38,7 +39,7 @@ class SchedulerService {
     await this.checkAndScheduleSyncs();
     
     this.initialized = true;
-    console.log('Scheduler service initialized successfully');
+    logger.info('Scheduler service initialized successfully');
   }
 
   /**
@@ -50,18 +51,18 @@ class SchedulerService {
       const configs = await dbLimiter(() => dbService.getProductSyncConfigs());
       
       if (!configs || configs.length === 0) {
-        console.log('No sync configurations found');
+        logger.info('No sync configurations found');
         return;
       }
       
-      console.log(`Found ${configs.length} sync configurations`);
+      logger.info(`Found ${configs.length} sync configurations`);
       
       // Process each configuration
       for (const config of configs) {
         await this.checkConfigForSync(config);
       }
     } catch (error) {
-      console.error('Error in scheduler check:', error);
+      logger.error('Error in scheduler check:', error);
     }
   }
 
@@ -70,13 +71,13 @@ class SchedulerService {
    */
   async retryFailedSyncs() {
     try {
-      console.log('Checking for failed syncs to retry...');
+      logger.info('Checking for failed syncs to retry...');
       
       // Get all configurations
       const configs = await dbLimiter(() => dbService.getProductSyncConfigs());
       
       if (!configs || configs.length === 0) {
-        console.log('No configurations found for retry check');
+        logger.info('No configurations found for retry check');
         return;
       }
       
@@ -102,17 +103,17 @@ class SchedulerService {
           continue;
         }
         
-        console.log(`Found failed sync for config ${id}, last failure: ${new Date(lastFailed.end_time).toISOString()}`);
-        console.log(`Scheduling retry for config ${id}`);
+        logger.info(`Found failed sync for config ${id}, last failure: ${new Date(lastFailed.end_time).toISOString()}`);
+        logger.info(`Scheduling retry for config ${id}`);
         
         // Schedule a retry (runSync will prevent duplicates)
         this.runSync(id);
         retryCount++;
       }
       
-      console.log(`Scheduled ${retryCount} retry sync(s) for previously failed configurations`);
+      logger.info(`Scheduled ${retryCount} retry sync(s) for previously failed configurations`);
     } catch (error) {
-      console.error('Error checking for failed syncs:', error);
+      logger.error('Error checking for failed syncs:', error);
     }
   }
 
@@ -126,7 +127,7 @@ class SchedulerService {
       const syncFrequency = config.syncFrequency || config.sync_frequency;
       
       if (!syncFrequency) {
-        console.log(`Config ${id} has no sync frequency set, skipping`);
+        logger.info(`Config ${id} has no sync frequency set, skipping`);
         return;
       }
       
@@ -137,7 +138,7 @@ class SchedulerService {
       const lastSync = await dbLimiter(() => dbService.getLastSuccessfulSync(id));
       
       if (!lastSync) {
-        console.log(`Config ${id} has never been successfully synced, scheduling now`);
+        logger.info(`Config ${id} has never been successfully synced, scheduling now`);
         this.runSync(id);
         return;
       }
@@ -145,17 +146,17 @@ class SchedulerService {
       const lastSyncTime = new Date(lastSync.end_time);
       const hoursSinceLastSync = (Date.now() - lastSyncTime.getTime()) / (1000 * 60 * 60);
       
-      console.log(`Config ${id} last successful sync: ${lastSyncTime.toISOString()}, ${hoursSinceLastSync.toFixed(2)} hours ago`);
+      logger.info(`Config ${id} last successful sync: ${lastSyncTime.toISOString()}, ${hoursSinceLastSync.toFixed(2)} hours ago`);
       
       // If time since last sync exceeds frequency, sync now
       if (hoursSinceLastSync >= frequencyHours) {
-        console.log(`Config ${id} needs sync (${hoursSinceLastSync.toFixed(2)} hours since last sync, frequency: ${frequencyHours} hours)`);
+        logger.info(`Config ${id} needs sync (${hoursSinceLastSync.toFixed(2)} hours since last sync, frequency: ${frequencyHours} hours)`);
         this.runSync(id);
       } else {
-        console.log(`Config ${id} does not need sync yet (${hoursSinceLastSync.toFixed(2)}/${frequencyHours} hours)`);
+        logger.info(`Config ${id} does not need sync yet (${hoursSinceLastSync.toFixed(2)}/${frequencyHours} hours)`);
       }
     } catch (error) {
-      console.error(`Error checking config ${config.id || 'unknown'} for sync:`, error);
+      logger.error(`Error checking config ${config.id || 'unknown'} for sync:`, error);
     }
   }
 
@@ -166,27 +167,27 @@ class SchedulerService {
   async runSync(configId) {
     // Check if a sync for this config is already running
     if (this.runningSyncs.has(configId)) {
-      console.log(`Scheduler: Sync for config ${configId} is already in progress. Skipping.`);
+      logger.info(`Scheduler: Sync for config ${configId} is already in progress. Skipping.`);
       return;
     }
     
     try {
-      console.log(`Scheduler: Starting sync for config ${configId}`);
+      logger.info(`Scheduler: Starting sync for config ${configId}`);
       this.runningSyncs.add(configId); // Mark as running
       
       // Run sync in background
       productSyncService.syncProducts(configId)
         .then(result => {
-          console.log(`Scheduler: Sync completed for config ${configId}`, result);
+          logger.info(`Scheduler: Sync completed for config ${configId}`, result);
         })
         .catch(error => {
-          console.error(`Scheduler: Sync failed for config ${configId}:`, error);
+          logger.error(`Scheduler: Sync failed for config ${configId}:`, error);
         })
         .finally(() => {
           this.runningSyncs.delete(configId); // Mark as finished
         });
     } catch (error) {
-      console.error(`Error starting sync for config ${configId}:`, error);
+      logger.error(`Error starting sync for config ${configId}:`, error);
       this.runningSyncs.delete(configId); // Ensure it's marked as finished even if start fails
     }
   }

@@ -1,5 +1,6 @@
 const ftp = require('basic-ftp');
 const dbService = require('./dbService');
+const logger = require('../utils/logger');
 
 class FtpService {
   constructor() {
@@ -20,10 +21,10 @@ class FtpService {
     try {
       const config = customConfig || await this.getFtpConfig();
       await client.access(config);
-      console.log(`FTP: Listing files in ${remotePath}`);
+      logger.info(`FTP: Listing files in ${remotePath}`);
       return await client.list(remotePath);
     } catch (err) {
-      console.error('FTP Error listing files:', err);
+      logger.error('FTP Error listing files:', err);
       throw err;
     } finally {
       client.close();
@@ -35,11 +36,11 @@ class FtpService {
     try {
       const config = customConfig || await this.getFtpConfig();
       await client.access(config);
-      console.log(`FTP: Downloading ${remotePath} to ${localPath}`);
+      logger.info(`FTP: Downloading ${remotePath} to ${localPath}`);
       await client.downloadTo(localPath, remotePath);
-      console.log(`FTP: File downloaded successfully to ${localPath}`);
+      logger.info(`FTP: File downloaded successfully to ${localPath}`);
     } catch (err) {
-      console.error('FTP Error downloading file:', err);
+      logger.error('FTP Error downloading file:', err);
       throw err;
     } finally {
       client.close();
@@ -51,11 +52,11 @@ class FtpService {
     try {
       const config = customConfig || await this.getFtpConfig();
       await client.access(config);
-      console.log(`FTP: Uploading ${localPath} to ${remotePath}`);
+      logger.info(`FTP: Uploading ${localPath} to ${remotePath}`);
       await client.uploadFrom(localPath, remotePath);
-      console.log(`FTP: File uploaded successfully to ${remotePath}`);
+      logger.info(`FTP: File uploaded successfully to ${remotePath}`);
     } catch (err) {
-      console.error('FTP Error uploading file:', err);
+      logger.error('FTP Error uploading file:', err);
       throw err;
     } finally {
       client.close();

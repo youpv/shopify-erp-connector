@@ -30,9 +30,10 @@ class ProductController {
       });
       
       // Handle the sync process in the background
-      syncPromise.catch(error => {
-        console.error('Background sync process error:', error);
-      });
+        syncPromise.catch(error => {
+          const logger = require('../utils/logger');
+          logger.error('Background sync process error:', error);
+        });
     } catch (error) {
       next(error);
     }
@@ -164,7 +165,8 @@ class ProductController {
       
       // Handle the sync process in the background
       syncPromise.catch(error => {
-        console.error(`Background sync process error for new config ${newConfig.id}:`, error);
+        const logger = require('../utils/logger');
+        logger.error(`Background sync process error for new config ${newConfig.id}:`, error);
       });
       
       res.status(201).json({

@@ -1,16 +1,17 @@
 const db = require('../config/databaseClient');
+const logger = require('../utils/logger');
 
 class DatabaseService {
   async testConnection() {
     try {
       const client = await db.getClient();
-      console.log('Successfully fetched client from pool.');
+      logger.info('Successfully fetched client from pool.');
       const res = await client.query('SELECT NOW()');
-      console.log('Database time:', res.rows[0].now);
+      logger.info('Database time:', res.rows[0].now);
       client.release();
       return true;
     } catch (error) {
-      console.error('Database connection test failed:', error);
+      logger.error('Database connection test failed:', error);
       return false;
     }
   }
@@ -29,7 +30,7 @@ class DatabaseService {
         port: rows[0].port || 21,
       };
     } catch (error) {
-      console.error('Error fetching FTP config from database:', error);
+        logger.error('Error fetching FTP config from database:', error);
       throw error;
     }
   }
@@ -59,7 +60,7 @@ class DatabaseService {
         metafieldMappings: typeof row.metafieldMappings === 'string' ? JSON.parse(row.metafieldMappings) : row.metafieldMappings,
       }));
     } catch (error) {
-      console.error('Error fetching product sync configs:', error);
+        logger.error('Error fetching product sync configs:', error);
       throw error;
     }
   }
@@ -94,7 +95,7 @@ class DatabaseService {
       const { rows } = await db.query(query, params);
       return rows[0];
     } catch (error) {
-      console.error('Error logging sync operation:', error);
+        logger.error('Error logging sync operation:', error);
       throw error;
     }
   }
@@ -155,7 +156,7 @@ class DatabaseService {
       const { rows } = await db.query(query, params);
       return rows[0];
     } catch (error) {
-      console.error('Error updating sync log:', error);
+        logger.error('Error updating sync log:', error);
       throw error;
     }
   }
@@ -164,7 +165,7 @@ class DatabaseService {
   async getProducts() {
     // const { rows } = await db.query('SELECT * FROM products_table_placeholder');
     // return rows;
-    console.log('Fetching products from DB placeholder');
+    logger.info('Fetching products from DB placeholder');
     return Promise.resolve([]);
   }
 
@@ -183,7 +184,7 @@ class DatabaseService {
       const { rows } = await db.query(query, [configId]);
       return rows[0] || null;
     } catch (error) {
-      console.error('Error fetching last successful sync:', error);
+        logger.error('Error fetching last successful sync:', error);
       return null;
     }
   }
@@ -232,7 +233,7 @@ class DatabaseService {
         metafieldMappings: typeof rows[0].metafieldMappings === 'string' ? JSON.parse(rows[0].metafieldMappings) : rows[0].metafieldMappings,
       };
     } catch (error) {
-      console.error('Error creating product sync config:', error);
+        logger.error('Error creating product sync config:', error);
       throw error;
     }
   }
@@ -318,7 +319,7 @@ class DatabaseService {
         metafieldMappings: typeof rows[0].metafieldMappings === 'string' ? JSON.parse(rows[0].metafieldMappings) : rows[0].metafieldMappings,
       };
     } catch (error) {
-      console.error('Error updating product sync config:', error);
+        logger.error('Error updating product sync config:', error);
       throw error;
     }
   }
@@ -335,7 +336,7 @@ class DatabaseService {
       
       return rows.length > 0;
     } catch (error) {
-      console.error('Error deleting product sync config:', error);
+        logger.error('Error deleting product sync config:', error);
       throw error;
     }
   }
@@ -359,7 +360,7 @@ class DatabaseService {
       const { rows } = await db.query(query, [configId, limit, offset]);
       return rows;
     } catch (error) {
-      console.error('Error fetching sync logs:', error);
+        logger.error('Error fetching sync logs:', error);
       throw error;
     }
   }
@@ -379,7 +380,7 @@ class DatabaseService {
       const { rows } = await db.query(query, [configId]);
       return rows[0] || null;
     } catch (error) {
-      console.error('Error fetching last failed sync:', error);
+        logger.error('Error fetching last failed sync:', error);
       return null;
     }
   }
@@ -403,7 +404,7 @@ class DatabaseService {
       // Return true if the failure was within the last 24 hours
       return hoursSinceFailure <= 24;
     } catch (error) {
-      console.error('Error checking for recent failed sync:', error);
+        logger.error('Error checking for recent failed sync:', error);
       return false;
     }
   }

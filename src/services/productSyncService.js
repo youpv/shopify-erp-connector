@@ -2,6 +2,7 @@ const shopifyService = require('./shopifyService');
 const ftpService = require('./ftpService');
 const dbService = require('./dbService');
 const { shopifyApiLimiter, ftpLimiter } = require('../utils/rateLimiters');
+const logger = require('../utils/logger');
 const path = require('path');
 const fs = require('fs').promises;
 const os = require('os');
@@ -67,7 +68,7 @@ class ProductSyncService {
             if (products && products[part]) {
               products = products[part];
             } else {
-              console.warn(`Data path '${dataPath}' not found in the response`);
+              logger.warn(`Data path '${dataPath}' not found in the response`);
               products = [];
               break;
             }
@@ -82,7 +83,7 @@ class ProductSyncService {
         throw new Error(`Unsupported connection type: ${connectionType}`);
       }
     } catch (error) {
-      console.error('Error fetching products from source:', error);
+      logger.error('Error fetching products from source:', error);
       throw error;
     }
   }
@@ -323,7 +324,7 @@ class ProductSyncService {
         
         return JSON.stringify(formattedList);
       } catch (error) {
-        console.warn(`Error formatting list metafield value: ${error.message}`);
+        logger.warn(`Error formatting list metafield value: ${error.message}`);
         return JSON.stringify(Array.isArray(value) ? value : [String(value)]);
       }
     }
@@ -391,7 +392,7 @@ class ProductSyncService {
    * @returns {string} JSONL content for bulk operation
    */
   prepareBulkOperationPayload(shopifyProducts, variantsData, operation) {
-    console.log(`[Product Sync] Preparing bulk ${operation} payload for ${shopifyProducts.length} products`);
+    logger.info(`[Product Sync] Preparing bulk ${operation} payload for ${shopifyProducts.length} products`);
     
     // Create a properly formatted JSONL string
     const jsonlLines = shopifyProducts.map(product => {
@@ -444,7 +445,7 @@ class ProductSyncService {
     });
     
     const jsonlContent = jsonlLines.join('\n');
-    console.log(`[Product Sync] JSONL payload size: ${jsonlContent.length} bytes`);
+    logger.info(`[Product Sync] JSONL payload size: ${jsonlContent.length} bytes`);
     
     return jsonlContent;
   }
@@ -596,7 +597,7 @@ class ProductSyncService {
       };
       
     } catch (error) {
-      console.error('Product sync error:', error);
+      logger.error('Product sync error:', error);
       
       // Update sync log with error
       if (syncLogId) {
@@ -652,7 +653,7 @@ class ProductSyncService {
         // This format should find variants matching any of the given SKUs
         let skuQuery = skuBatch.map(sku => `sku:${sku}`).join(' OR ');
         
-        console.log(`[Product Sync] Batch ${Math.floor(i/20) + 1}: Querying for ${skuBatch.length} SKUs`);
+        logger.info(`[Product Sync] Batch ${Math.floor(i/20) + 1}: Querying for ${skuBatch.length} SKUs`);
         
         // Query Shopify for existing products via variants
         try {
@@ -703,7 +704,7 @@ class ProductSyncService {
             });
           }
         } catch (error) {
-          console.error(`[Product Sync] Error with batch SKU query:`, error.message);
+          logger.error(`[Product Sync] Error with batch SKU query:`, error.message);
         }
         
         // If we didn't find all SKUs, try individual lookups for the missing ones
@@ -728,7 +729,7 @@ class ProductSyncService {
               );
               
               if (individualResult?.data?.productVariants?.edges?.length > 0) {
-                console.log(`[Product Sync] Individual query found product for SKU: ${sku}`);
+                logger.info(`[Product Sync] Individual query found product for SKU: ${sku}`);
                 
                 // Extract product info from variant
                 const variantEdge = individualResult.data.productVariants.edges[0];
@@ -736,7 +737,7 @@ class ProductSyncService {
                 const product = variant.product;
                 
                 if (variant && product) {
-                  console.log(`[Product Sync] Found exact match for SKU: ${sku} (product: ${product.title})`);
+                  logger.info(`[Product Sync] Found exact match for SKU: ${sku} (product: ${product.title})`);
                   
                   existingProducts[sku] = {
                     productId: product.id,
@@ -753,15 +754,15 @@ class ProductSyncService {
                 }
               }
             } catch (error) {
-              console.error(`[Product Sync] Error with individual SKU query for ${sku}:`, error.message);
+              logger.error(`[Product Sync] Error with individual SKU query for ${sku}:`, error.message);
             }
           }
         }
       }
     }
     
-    console.log(`[Product Sync] Total SKUs found in Shopify: ${Object.keys(existingProducts).length}`);
-    console.log(`[Product Sync] Matched SKUs: ${JSON.stringify(Object.keys(existingProducts).slice(0, 10))}${Object.keys(existingProducts).length > 10 ? '...' : ''}`);
+    logger.info(`[Product Sync] Total SKUs found in Shopify: ${Object.keys(existingProducts).length}`);
+    logger.info(`[Product Sync] Matched SKUs: ${JSON.stringify(Object.keys(existingProducts).slice(0, 10))}${Object.keys(existingProducts).length > 10 ? '...' : ''}`);
     
     // Split products into create and update batches
     const productsToCreate = [];
@@ -792,7 +793,7 @@ class ProductSyncService {
       }
     });
     
-    console.log(`[Product Sync] Not found SKUs: ${JSON.stringify(notFoundSkus.slice(0, 10))}${notFoundSkus.length > 10 ? '...' : ''}`);
+    logger.info(`[Product Sync] Not found SKUs: ${JSON.stringify(notFoundSkus.slice(0, 10))}${notFoundSkus.length > 10 ? '...' : ''}`);
 
     // Update sync log with split results
     await dbService.updateSyncLog(syncLogId, {
@@ -880,13 +881,13 @@ class ProductSyncService {
           );
           
           if (result.data?.productSet?.userErrors?.length > 0) {
-            console.error("Error creating product:", result.data.productSet.userErrors);
+            logger.error("Error creating product:", result.data.productSet.userErrors);
             stats.failedCount++;
           } else {
             stats.createSuccessCount++;
           }
         } catch (error) {
-          console.error(`Error creating product: ${error.message}`);
+          logger.error(`Error creating product: ${error.message}`);
           stats.failedCount++;
         }
       }
@@ -964,13 +965,13 @@ class ProductSyncService {
           );
           
           if (result.data?.productSet?.userErrors?.length > 0) {
-            console.error("Error updating product:", result.data.productSet.userErrors);
+            logger.error("Error updating product:", result.data.productSet.userErrors);
             stats.failedCount++;
           } else {
             stats.updateSuccessCount++;
           }
         } catch (error) {
-          console.error(`Error updating product: ${error.message}`);
+          logger.error(`Error updating product: ${error.message}`);
           stats.failedCount++;
         }
       }
@@ -979,7 +980,7 @@ class ProductSyncService {
       // For bulk operations, we'll use our improved processBulkBatch method
       if (productsToCreate.length > 0) {
         try {
-          console.log(`[Product Sync] Processing ${productsToCreate.length} products for bulk creation`);
+          logger.info(`[Product Sync] Processing ${productsToCreate.length} products for bulk creation`);
           
           // Update sync log
           await dbService.updateSyncLog(syncLogId, {
@@ -992,15 +993,15 @@ class ProductSyncService {
           
           // Consider the operation successful if it completes
           if (bulkResult.status === 'COMPLETED') {
-            console.log(`[Product Sync] Bulk creation completed successfully`);
+            logger.info(`[Product Sync] Bulk creation completed successfully`);
             stats.createSuccessCount = productsToCreate.length;
           } else {
-            console.error(`[Product Sync] Bulk creation failed with status: ${bulkResult.status}`);
-            console.error(`Error: ${bulkResult.errorCode || 'Unknown error'}`);
+            logger.error(`[Product Sync] Bulk creation failed with status: ${bulkResult.status}`);
+            logger.error(`Error: ${bulkResult.errorCode || 'Unknown error'}`);
             stats.failedCount += productsToCreate.length;
           }
         } catch (error) {
-          console.error("Bulk creation error:", error.message);
+          logger.error("Bulk creation error:", error.message);
           stats.failedCount += productsToCreate.length;
         }
       }
@@ -1008,7 +1009,7 @@ class ProductSyncService {
       // Process bulk updates similarly
       if (productsToUpdate.length > 0) {
         try {
-          console.log(`[Product Sync] Processing ${productsToUpdate.length} products for bulk update`);
+          logger.info(`[Product Sync] Processing ${productsToUpdate.length} products for bulk update`);
           
           // Update sync log
           await dbService.updateSyncLog(syncLogId, {
@@ -1021,15 +1022,15 @@ class ProductSyncService {
           
           // Consider the operation successful if it completes
           if (bulkResult.status === 'COMPLETED') {
-            console.log(`[Product Sync] Bulk update completed successfully`);
+            logger.info(`[Product Sync] Bulk update completed successfully`);
             stats.updateSuccessCount = productsToUpdate.length;
           } else {
-            console.error(`[Product Sync] Bulk update failed with status: ${bulkResult.status}`);
-            console.error(`Error: ${bulkResult.errorCode || 'Unknown error'}`);
+            logger.error(`[Product Sync] Bulk update failed with status: ${bulkResult.status}`);
+            logger.error(`Error: ${bulkResult.errorCode || 'Unknown error'}`);
             stats.failedCount += productsToUpdate.length;
           }
         } catch (error) {
-          console.error("Bulk update error:", error.message);
+          logger.error("Bulk update error:", error.message);
           stats.failedCount += productsToUpdate.length;
         }
       }
