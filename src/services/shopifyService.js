@@ -2,6 +2,7 @@ const { GraphQLClient } = require('graphql-request');
 const appConfig = require('../config');
 const FormData = require('form-data');
 const fetch = require('node-fetch');
+const logger = require('../utils/logger');
 const { STAGED_UPLOADS_CREATE, BULK_OPERATION_RUN_QUERY, BULK_OPERATION_RUN_MUTATION } = require('../graphql/mutations/productMutations');
 const { GET_BULK_OPERATION_STATUS } = require('../graphql/queries/productQueries');
 
@@ -14,7 +15,7 @@ class ShopifyService {
     // Use the admin access token for authentication
     this.accessToken = appConfig.shopify.adminApiAccessToken || appConfig.shopify.apiSecret;
     
-    console.log(`Initializing Shopify GraphQL client for ${this.endpoint}`);
+    logger.info(`Initializing Shopify GraphQL client for ${this.endpoint}`);
     
     this.client = new GraphQLClient(this.endpoint, {
       headers: {
@@ -38,7 +39,7 @@ class ShopifyService {
                              variables.query.includes('variants.sku'));
       
       if (isProductQuery) {
-        console.log(`[Shopify API] Executing product query with variables:`, 
+        logger.info(`[Shopify API] Executing product query with variables:`,
           JSON.stringify(variables, null, 2).substring(0, 500) + 
           (JSON.stringify(variables).length > 500 ? '...' : '')
         );
@@ -51,29 +52,29 @@ class ShopifyService {
       if (isProductQuery) {
         // For product queries, log more details about the response
         const productCount = response.products?.edges?.length || 0;
-        console.log(`[Shopify API] Product query completed in ${duration}ms, found ${productCount} products`);
+        logger.info(`[Shopify API] Product query completed in ${duration}ms, found ${productCount} products`);
         
         // Log first few products and their variants if this was an SKU lookup
         if (variables.query && typeof variables.query === 'string' && variables.query.includes('variants.sku')) {
           if (response.products?.edges) {
             response.products.edges.slice(0, 3).forEach(edge => {
               const product = edge.node;
-              console.log(`[Shopify API] Product: ${product.title} (${product.id})`);
+              logger.info(`[Shopify API] Product: ${product.title} (${product.id})`);
               
               if (product.variants?.edges) {
                 product.variants.edges.slice(0, 5).forEach(variantEdge => {
                   const variant = variantEdge.node;
-                  console.log(`[Shopify API]   - Variant SKU: ${variant.sku}`);
+                logger.info(`[Shopify API]   - Variant SKU: ${variant.sku}`);
                 });
                 
                 if (product.variants.edges.length > 5) {
-                  console.log(`[Shopify API]   - ... and ${product.variants.edges.length - 5} more variants`);
+                  logger.info(`[Shopify API]   - ... and ${product.variants.edges.length - 5} more variants`);
                 }
               }
             });
             
             if (response.products.edges.length > 3) {
-              console.log(`[Shopify API] ... and ${response.products.edges.length - 3} more products`);
+            logger.info(`[Shopify API] ... and ${response.products.edges.length - 3} more products`);
             }
           }
         }
@@ -84,7 +85,7 @@ class ShopifyService {
       // Provide more detailed error information
       if (error.response) {
         const statusCode = error.response.status;
-        console.error(`Shopify API Error (${statusCode}):`, {
+        logger.error(`Shopify API Error (${statusCode}):`, {
           statusCode,
           statusText: error.response.statusText,
           method: 'POST',
@@ -94,10 +95,10 @@ class ShopifyService {
         });
         
         if (statusCode === 401) {
-          console.error('Authentication error: Please check your Shopify API credentials in .env file');
+          logger.error('Authentication error: Please check your Shopify API credentials in .env file');
         }
       } else {
-        console.error('GraphQL Execution Error:', error.message);
+        logger.error('GraphQL Execution Error:', error.message);
       }
       
       if (error.response && error.response.errors) {
@@ -115,7 +116,7 @@ class ShopifyService {
    * @returns {Promise<object>} - The staged upload details
    */
   async stageUpload(filename, fileSize) {
-    console.log(`[Shopify API] Staging upload for file: ${filename}, size: ${fileSize} bytes`);
+    logger.info(`[Shopify API] Staging upload for file: ${filename}, size: ${fileSize} bytes`);
     
     const input = [{
       resource: 'BULK_MUTATION_VARIABLES',
@@ -159,7 +160,7 @@ class ShopifyService {
       throw new Error('Missing file path in staged upload parameters');
     }
     
-    console.log(`[Shopify API] File path for upload: ${filePath}`);
+    logger.info(`[Shopify API] File path for upload: ${filePath}`);
     
     // Add all parameters from the staged target
     parameters.forEach(param => {
@@ -172,7 +173,7 @@ class ShopifyService {
       contentType: 'application/jsonl'
     });
     
-    console.log(`[Shopify API] Uploading file to staged target`);
+    logger.info(`[Shopify API] Uploading file to staged target`);
     
     // Using node-fetch for HTTP requests
     try {
@@ -185,16 +186,16 @@ class ShopifyService {
         throw new Error(`Failed to upload to staged target: ${response.status} ${response.statusText}`);
       }
       
-      console.log(`[Shopify API] File uploaded successfully, status: ${response.status}`);
+      logger.info(`[Shopify API] File uploaded successfully, status: ${response.status}`);
       
       // Construct the full resource URL with the file path
       // Format: https://shopify-staged-uploads.storage.googleapis.com/tmp/SHOP_ID/bulk/UUID/FILENAME.jsonl
       const fullResourceUrl = `${url}${filePath}`;
-      console.log(`[Shopify API] Constructed resource URL: ${fullResourceUrl}`);
+      logger.info(`[Shopify API] Constructed resource URL: ${fullResourceUrl}`);
       
       return fullResourceUrl;
     } catch (error) {
-      console.error('[Shopify API] Error uploading file:', error.message);
+      logger.error('[Shopify API] Error uploading file:', error.message);
       throw error;
     }
   }
@@ -209,12 +210,12 @@ class ShopifyService {
     // Stage the upload
     const stagedTarget = await this.stageUpload(`bulk-${Date.now()}.jsonl`, jsonlContent.length);
     
-    console.log("[Shopify API] Staged target created");
+    logger.info("[Shopify API] Staged target created");
     
     // Upload the JSONL file
     const resourceUrl = await this.uploadToStagedTarget(stagedTarget, jsonlContent);
     
-    console.log(`[Shopify API] Resource URL for bulk operation: ${resourceUrl}`);
+    logger.info(`[Shopify API] Resource URL for bulk operation: ${resourceUrl}`);
     
     // Verify the resourceUrl is not empty and properly formatted
     if (!resourceUrl || !resourceUrl.includes('https://')) {

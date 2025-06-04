@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS ftp_config (
   username VARCHAR(255) NOT NULL,
   password VARCHAR(255) NOT NULL,
   port INTEGER DEFAULT 21,
+  timeout INTEGER, -- Timeout in milliseconds
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 ); 

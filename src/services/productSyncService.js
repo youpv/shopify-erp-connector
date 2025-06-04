@@ -2,6 +2,7 @@ const shopifyService = require('./shopifyService');
 const ftpService = require('./ftpService');
 const dbService = require('./dbService');
 const { shopifyApiLimiter, ftpLimiter } = require('../utils/rateLimiters');
+const logger = require('../utils/logger');
 const path = require('path');
 const fs = require('fs').promises;
 const os = require('os');
@@ -13,7 +14,8 @@ const {
   BULK_CREATE_PRODUCT, 
   BULK_UPDATE_PRODUCT,
   CREATE_PRODUCT,
-  UPDATE_PRODUCT
+  UPDATE_PRODUCT,
+  DELETE_PRODUCT
 } = require('../graphql/mutations/productMutations');
 
 // Add a constant for the maximum recommended batch size
@@ -67,7 +69,7 @@ class ProductSyncService {
             if (products && products[part]) {
               products = products[part];
             } else {
-              console.warn(`Data path '${dataPath}' not found in the response`);
+              logger.warn(`Data path '${dataPath}' not found in the response`);
               products = [];
               break;
             }
@@ -82,7 +84,7 @@ class ProductSyncService {
         throw new Error(`Unsupported connection type: ${connectionType}`);
       }
     } catch (error) {
-      console.error('Error fetching products from source:', error);
+      logger.error('Error fetching products from source:', error);
       throw error;
     }
   }
@@ -323,7 +325,7 @@ class ProductSyncService {
         
         return JSON.stringify(formattedList);
       } catch (error) {
-        console.warn(`Error formatting list metafield value: ${error.message}`);
+        logger.warn(`Error formatting list metafield value: ${error.message}`);
         return JSON.stringify(Array.isArray(value) ? value : [String(value)]);
       }
     }
@@ -391,7 +393,7 @@ class ProductSyncService {
    * @returns {string} JSONL content for bulk operation
    */
   prepareBulkOperationPayload(shopifyProducts, variantsData, operation) {
-    console.log(`[Product Sync] Preparing bulk ${operation} payload for ${shopifyProducts.length} products`);
+    logger.info(`[Product Sync] Preparing bulk ${operation} payload for ${shopifyProducts.length} products`);
     
     // Create a properly formatted JSONL string
     const jsonlLines = shopifyProducts.map(product => {
@@ -444,7 +446,7 @@ class ProductSyncService {
     });
     
     const jsonlContent = jsonlLines.join('\n');
-    console.log(`[Product Sync] JSONL payload size: ${jsonlContent.length} bytes`);
+    logger.info(`[Product Sync] JSONL payload size: ${jsonlContent.length} bytes`);
     
     return jsonlContent;
   }
@@ -571,13 +573,28 @@ class ProductSyncService {
         useBulk || (!limitedMode && processedProducts.length > 10)
       );
       
+      // Run duplicate cleanup after sync is complete
+      let cleanupStats = null;
+      try {
+        await dbService.updateSyncLog(syncLogId, {
+          status: 'cleaning_duplicates',
+          message: 'Running duplicate cleanup...'
+        });
+        
+        cleanupStats = await this.cleanupDuplicateProducts(syncLogId);
+        logger.info(`[Product Sync] Duplicate cleanup completed: ${cleanupStats.productsDeleted} duplicates removed`);
+      } catch (cleanupError) {
+        logger.error('[Product Sync] Error during duplicate cleanup:', cleanupError);
+        // Don't fail the whole sync if cleanup fails
+      }
+      
       // Final update to sync log
       await dbService.updateSyncLog(syncLogId, {
         endTime: new Date(),
         status: stats.failedCount === 0 ? 'completed' : 'completed_with_errors',
         message: limitedMode 
-          ? `Development sync completed (limited to ${limit}). Created ${stats.createSuccessCount} products, updated ${stats.updateSuccessCount}, ${stats.failedCount} failed.`
-          : `Sync completed. Created ${stats.createSuccessCount} products, updated ${stats.updateSuccessCount}, ${stats.failedCount} failed.`,
+          ? `Development sync completed (limited to ${limit}). Created ${stats.createSuccessCount} products, updated ${stats.updateSuccessCount}, ${stats.failedCount} failed.${cleanupStats ? ` Removed ${cleanupStats.productsDeleted} duplicates.` : ''}`
+          : `Sync completed. Created ${stats.createSuccessCount} products, updated ${stats.updateSuccessCount}, ${stats.failedCount} failed.${cleanupStats ? ` Removed ${cleanupStats.productsDeleted} duplicates.` : ''}`,
         itemsSucceeded: stats.createSuccessCount + stats.updateSuccessCount,
         itemsFailed: stats.failedCount,
       });
@@ -585,18 +602,19 @@ class ProductSyncService {
       return {
         success: true,
         message: limitedMode 
-          ? `Development sync completed (limited to ${limit}). Created ${stats.createSuccessCount} products, updated ${stats.updateSuccessCount}, ${stats.failedCount} failed.`
-          : `Sync completed. Created ${stats.createSuccessCount} products, updated ${stats.updateSuccessCount}, ${stats.failedCount} failed.`,
+          ? `Development sync completed (limited to ${limit}). Created ${stats.createSuccessCount} products, updated ${stats.updateSuccessCount}, ${stats.failedCount} failed.${cleanupStats ? ` Removed ${cleanupStats.productsDeleted} duplicates.` : ''}`
+          : `Sync completed. Created ${stats.createSuccessCount} products, updated ${stats.updateSuccessCount}, ${stats.failedCount} failed.${cleanupStats ? ` Removed ${cleanupStats.productsDeleted} duplicates.` : ''}`,
         syncLogId,
         ...(limitedMode ? { originalProductCount: originalCount } : {}),
         productCount: erpProducts.length,
         createSuccessCount: stats.createSuccessCount,
         updateSuccessCount: stats.updateSuccessCount,
         failedCount: stats.failedCount,
+        ...(cleanupStats ? { duplicatesRemoved: cleanupStats.productsDeleted } : {})
       };
       
     } catch (error) {
-      console.error('Product sync error:', error);
+      logger.error('Product sync error:', error);
       
       // Update sync log with error
       if (syncLogId) {
@@ -622,44 +640,24 @@ class ProductSyncService {
     // Look up existing products by SKU to determine create vs update
     const existingProducts = {};
     
-    // Collect all SKUs from products to look up and normalize them
+    // Collect all SKUs from products to look up
     const skus = processedProducts
       .filter(p => p.sku)
       .map(p => p.sku);
     
-    // Function to normalize SKUs for consistent comparison
-    const normalizeSkuForComparison = (sku) => {
-      if (!sku) return '';
-      // Convert to string, trim whitespace, and convert to lowercase for case-insensitive comparison
-      return String(sku).trim().toLowerCase();
-    };
-    
-    // Create a lookup map of normalized SKUs to original SKUs
-    const skuLookup = {};
-    processedProducts.forEach(product => {
-      if (product.sku) {
-        const normalizedSku = normalizeSkuForComparison(product.sku);
-        skuLookup[normalizedSku] = product.sku;
-      }
-    });
-    
     if (skus.length > 0) {
-      // Process SKUs in batches of 20 for API efficiency (smaller batches for better reliability)
-      for (let i = 0; i < skus.length; i += 20) {
-        const skuBatch = skus.slice(i, i + 20);
+      logger.info(`[Product Sync] Looking up ${skus.length} SKUs in Shopify`);
+      
+      // Process SKUs one by one for more accurate matching
+      for (const sku of skus) {
+        if (!sku) continue;
         
-        // Create a query for variant lookup
-        // This format should find variants matching any of the given SKUs
-        let skuQuery = skuBatch.map(sku => `sku:${sku}`).join(' OR ');
-        
-        console.log(`[Product Sync] Batch ${Math.floor(i/20) + 1}: Querying for ${skuBatch.length} SKUs`);
-        
-        // Query Shopify for existing products via variants
         try {
-          const results = await shopifyApiLimiter(() => 
+          // Use a more precise query for each SKU
+          const result = await shopifyApiLimiter(() => 
             shopifyService.executeGraphQL(`
-              query getProductVariantsBySkus($query: String!) {
-                productVariants(first: 50, query: $query) {
+              query getProductVariantBySku($sku: String!) {
+                productVariants(first: 10, query: $sku) {
                   edges {
                     node {
                       id
@@ -673,126 +671,75 @@ class ProductSyncService {
                   }
                 }
               }
-            `, { query: skuQuery })
+            `, { sku: `sku:"${sku}"` }) // Use exact match with quotes
           );
           
-          // Map SKUs to product IDs
-          if (results?.data?.productVariants?.edges) {
-            results.data.productVariants.edges.forEach(edge => {
-              const variant = edge.node;
+          if (result?.data?.productVariants?.edges) {
+            // Find exact SKU match (case-sensitive)
+            const exactMatch = result.data.productVariants.edges.find(edge => 
+              edge.node.sku === sku
+            );
+            
+            if (exactMatch) {
+              const variant = exactMatch.node;
               const product = variant.product;
               
-              if (variant && variant.sku && product) {
-                // Normalize the SKU from the API for consistent comparison
-                const normalizedSku = normalizeSkuForComparison(variant.sku);
-                
-                // Store using both normalized and original SKU to catch all potential matches
-                existingProducts[variant.sku] = {
-                  productId: product.id,
-                  variantId: variant.id,
-                  title: product.title
-                };
-                
-                // Also store with normalized key
-                existingProducts[normalizedSku] = {
-                  productId: product.id,
-                  variantId: variant.id,
-                  title: product.title
-                };
-              }
-            });
-          }
-        } catch (error) {
-          console.error(`[Product Sync] Error with batch SKU query:`, error.message);
-        }
-        
-        // If we didn't find all SKUs, try individual lookups for the missing ones
-        const foundSkus = Object.keys(existingProducts).filter(sku => 
-          skuBatch.includes(sku) || skuBatch.some(batchSku => 
-            normalizeSkuForComparison(batchSku) === normalizeSkuForComparison(sku)
-          )
-        );
-        const missingSkus = skuBatch.filter(sku => 
-          !foundSkus.includes(sku) && 
-          !foundSkus.some(foundSku => normalizeSkuForComparison(foundSku) === normalizeSkuForComparison(sku))
-        );
-        
-        if (missingSkus.length > 0) {
-          
-          // Try individual queries for each missing SKU
-          for (const sku of missingSkus) {
-            // Use the dedicated variant SKU query for more precise matching
-            try {
-              const individualResult = await shopifyApiLimiter(() => 
-                shopifyService.executeGraphQL(GET_PRODUCT_BY_VARIANT_SKU, { sku: `sku:${sku}` })
+              logger.info(`[Product Sync] Found exact match for SKU: ${sku} (product: ${product.title})`);
+              
+              existingProducts[sku] = {
+                productId: product.id,
+                variantId: variant.id,
+                title: product.title
+              };
+            } else {
+              // If no exact match, check for case-insensitive match
+              const caseInsensitiveMatch = result.data.productVariants.edges.find(edge => 
+                edge.node.sku && edge.node.sku.toLowerCase() === sku.toLowerCase()
               );
               
-              if (individualResult?.data?.productVariants?.edges?.length > 0) {
-                console.log(`[Product Sync] Individual query found product for SKU: ${sku}`);
-                
-                // Extract product info from variant
-                const variantEdge = individualResult.data.productVariants.edges[0];
-                const variant = variantEdge.node;
+              if (caseInsensitiveMatch) {
+                const variant = caseInsensitiveMatch.node;
                 const product = variant.product;
                 
-                if (variant && product) {
-                  console.log(`[Product Sync] Found exact match for SKU: ${sku} (product: ${product.title})`);
-                  
-                  existingProducts[sku] = {
-                    productId: product.id,
-                    variantId: variant.id,
-                    title: product.title
-                  };
-                  
-                  // Also store normalized version
-                  existingProducts[normalizeSkuForComparison(sku)] = {
-                    productId: product.id,
-                    variantId: variant.id,
-                    title: product.title
-                  };
-                }
+                logger.warn(`[Product Sync] Found case-insensitive match for SKU: ${sku} -> ${variant.sku} (product: ${product.title})`);
+                
+                existingProducts[sku] = {
+                  productId: product.id,
+                  variantId: variant.id,
+                  title: product.title
+                };
               }
-            } catch (error) {
-              console.error(`[Product Sync] Error with individual SKU query for ${sku}:`, error.message);
             }
           }
+        } catch (error) {
+          logger.error(`[Product Sync] Error looking up SKU ${sku}:`, error.message);
         }
       }
     }
     
-    console.log(`[Product Sync] Total SKUs found in Shopify: ${Object.keys(existingProducts).length}`);
-    console.log(`[Product Sync] Matched SKUs: ${JSON.stringify(Object.keys(existingProducts).slice(0, 10))}${Object.keys(existingProducts).length > 10 ? '...' : ''}`);
+    logger.info(`[Product Sync] Found ${Object.keys(existingProducts).length} existing products by SKU`);
     
     // Split products into create and update batches
     const productsToCreate = [];
     const productsToUpdate = [];
     
-    // Track potential duplicates for debugging
-    const notFoundSkus = [];
-    
     processedProducts.forEach(product => {
       const sku = product.sku;
-      const normalizedSku = normalizeSkuForComparison(sku);
       
-      // Check for match using both original and normalized SKU
-      if (sku && (existingProducts[sku] || existingProducts[normalizedSku])) {
+      if (sku && existingProducts[sku]) {
         // Product exists - prepare for update
-        const matchInfo = existingProducts[sku] || existingProducts[normalizedSku];
         productsToUpdate.push({
           ...product,
-          productId: matchInfo.productId,
-          variantId: matchInfo.variantId
+          productId: existingProducts[sku].productId,
+          variantId: existingProducts[sku].variantId
         });
       } else {
         // New product - prepare for creation
-        if (sku) {
-          notFoundSkus.push(sku);
-        }
         productsToCreate.push(product);
       }
     });
-    
-    console.log(`[Product Sync] Not found SKUs: ${JSON.stringify(notFoundSkus.slice(0, 10))}${notFoundSkus.length > 10 ? '...' : ''}`);
+
+    logger.info(`[Product Sync] Will create ${productsToCreate.length} new products and update ${productsToUpdate.length} existing products`);
 
     // Update sync log with split results
     await dbService.updateSyncLog(syncLogId, {
@@ -880,13 +827,13 @@ class ProductSyncService {
           );
           
           if (result.data?.productSet?.userErrors?.length > 0) {
-            console.error("Error creating product:", result.data.productSet.userErrors);
+            logger.error("Error creating product:", result.data.productSet.userErrors);
             stats.failedCount++;
           } else {
             stats.createSuccessCount++;
           }
         } catch (error) {
-          console.error(`Error creating product: ${error.message}`);
+          logger.error(`Error creating product: ${error.message}`);
           stats.failedCount++;
         }
       }
@@ -964,13 +911,13 @@ class ProductSyncService {
           );
           
           if (result.data?.productSet?.userErrors?.length > 0) {
-            console.error("Error updating product:", result.data.productSet.userErrors);
+            logger.error("Error updating product:", result.data.productSet.userErrors);
             stats.failedCount++;
           } else {
             stats.updateSuccessCount++;
           }
         } catch (error) {
-          console.error(`Error updating product: ${error.message}`);
+          logger.error(`Error updating product: ${error.message}`);
           stats.failedCount++;
         }
       }
@@ -979,7 +926,7 @@ class ProductSyncService {
       // For bulk operations, we'll use our improved processBulkBatch method
       if (productsToCreate.length > 0) {
         try {
-          console.log(`[Product Sync] Processing ${productsToCreate.length} products for bulk creation`);
+          logger.info(`[Product Sync] Processing ${productsToCreate.length} products for bulk creation`);
           
           // Update sync log
           await dbService.updateSyncLog(syncLogId, {
@@ -992,15 +939,15 @@ class ProductSyncService {
           
           // Consider the operation successful if it completes
           if (bulkResult.status === 'COMPLETED') {
-            console.log(`[Product Sync] Bulk creation completed successfully`);
+            logger.info(`[Product Sync] Bulk creation completed successfully`);
             stats.createSuccessCount = productsToCreate.length;
           } else {
-            console.error(`[Product Sync] Bulk creation failed with status: ${bulkResult.status}`);
-            console.error(`Error: ${bulkResult.errorCode || 'Unknown error'}`);
+            logger.error(`[Product Sync] Bulk creation failed with status: ${bulkResult.status}`);
+            logger.error(`Error: ${bulkResult.errorCode || 'Unknown error'}`);
             stats.failedCount += productsToCreate.length;
           }
         } catch (error) {
-          console.error("Bulk creation error:", error.message);
+          logger.error("Bulk creation error:", error.message);
           stats.failedCount += productsToCreate.length;
         }
       }
@@ -1008,7 +955,7 @@ class ProductSyncService {
       // Process bulk updates similarly
       if (productsToUpdate.length > 0) {
         try {
-          console.log(`[Product Sync] Processing ${productsToUpdate.length} products for bulk update`);
+          logger.info(`[Product Sync] Processing ${productsToUpdate.length} products for bulk update`);
           
           // Update sync log
           await dbService.updateSyncLog(syncLogId, {
@@ -1021,21 +968,229 @@ class ProductSyncService {
           
           // Consider the operation successful if it completes
           if (bulkResult.status === 'COMPLETED') {
-            console.log(`[Product Sync] Bulk update completed successfully`);
+            logger.info(`[Product Sync] Bulk update completed successfully`);
             stats.updateSuccessCount = productsToUpdate.length;
           } else {
-            console.error(`[Product Sync] Bulk update failed with status: ${bulkResult.status}`);
-            console.error(`Error: ${bulkResult.errorCode || 'Unknown error'}`);
+            logger.error(`[Product Sync] Bulk update failed with status: ${bulkResult.status}`);
+            logger.error(`Error: ${bulkResult.errorCode || 'Unknown error'}`);
             stats.failedCount += productsToUpdate.length;
           }
         } catch (error) {
-          console.error("Bulk update error:", error.message);
+          logger.error("Bulk update error:", error.message);
           stats.failedCount += productsToUpdate.length;
         }
       }
     }
     
     return stats;
+  }
+
+  /**
+   * Clean up duplicate products in Shopify based on SKU
+   * @param {string} syncLogId - The ID of the sync log (optional)
+   * @returns {Promise<Object>} - Cleanup statistics
+   */
+  async cleanupDuplicateProducts(syncLogId = null) {
+    logger.info('[Product Cleanup] Starting duplicate product cleanup');
+    
+    const stats = {
+      totalProducts: 0,
+      duplicatesFound: 0,
+      productsDeleted: 0,
+      errors: 0
+    };
+    
+    try {
+      // Query to get all products with their variants
+      const PRODUCTS_WITH_SKUS_QUERY = `
+        query getAllProductsWithSkus($cursor: String) {
+          products(first: 250, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                title
+                createdAt
+                updatedAt
+                variants(first: 250) {
+                  edges {
+                    node {
+                      id
+                      sku
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+      
+      // Collect all products
+      const allProducts = [];
+      let hasNextPage = true;
+      let cursor = null;
+      
+      while (hasNextPage) {
+        const result = await shopifyApiLimiter(() => 
+          shopifyService.executeGraphQL(PRODUCTS_WITH_SKUS_QUERY, { cursor })
+        );
+        
+        if (result?.data?.products?.edges) {
+          allProducts.push(...result.data.products.edges.map(edge => edge.node));
+          hasNextPage = result.data.products.pageInfo.hasNextPage;
+          cursor = result.data.products.pageInfo.endCursor;
+        } else {
+          hasNextPage = false;
+        }
+      }
+      
+      stats.totalProducts = allProducts.length;
+      logger.info(`[Product Cleanup] Found ${stats.totalProducts} total products`);
+      
+      // Group products by SKU
+      const productsBySku = {};
+      
+      allProducts.forEach(product => {
+        // Check all variants for SKUs
+        if (product.variants && product.variants.edges) {
+          product.variants.edges.forEach(variantEdge => {
+            const variant = variantEdge.node;
+            if (variant.sku) {
+              if (!productsBySku[variant.sku]) {
+                productsBySku[variant.sku] = [];
+              }
+              productsBySku[variant.sku].push({
+                productId: product.id,
+                title: product.title,
+                createdAt: product.createdAt,
+                updatedAt: product.updatedAt
+              });
+            }
+          });
+        }
+      });
+      
+      // Find duplicates and collect unique products to delete
+      const productsToDelete = new Map(); // Use Map to ensure uniqueness by productId
+      const duplicateSkus = Object.keys(productsBySku).filter(sku => productsBySku[sku].length > 1);
+      stats.duplicatesFound = duplicateSkus.length;
+      
+      logger.info(`[Product Cleanup] Found ${stats.duplicatesFound} SKUs with duplicate products`);
+      
+      if (syncLogId) {
+        await dbService.updateSyncLog(syncLogId, {
+          status: 'cleaning_duplicates',
+          message: `Found ${stats.duplicatesFound} duplicate SKUs to clean up`
+        });
+      }
+      
+      // Collect products to delete, ensuring each product is only deleted once
+      for (const sku of duplicateSkus) {
+        const duplicates = productsBySku[sku];
+        
+        // Sort by updatedAt date (newest first)
+        duplicates.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+        
+        // Keep the first one (most recently updated), mark the rest for deletion
+        const toKeep = duplicates[0];
+        const toDelete = duplicates.slice(1);
+        
+        logger.info(`[Product Cleanup] SKU "${sku}" has ${duplicates.length} products. Keeping: ${toKeep.title} (${toKeep.productId})`);
+        
+        for (const product of toDelete) {
+          // Only add to deletion list if not already there
+          if (!productsToDelete.has(product.productId)) {
+            productsToDelete.set(product.productId, product);
+            logger.info(`[Product Cleanup] Marking for deletion: ${product.title} (${product.productId})`);
+          }
+        }
+      }
+      
+      const uniqueProductsToDelete = Array.from(productsToDelete.values());
+      logger.info(`[Product Cleanup] Total unique products to delete: ${uniqueProductsToDelete.length}`);
+      
+      if (uniqueProductsToDelete.length === 0) {
+        logger.info('[Product Cleanup] No duplicates to clean up');
+        return stats;
+      }
+      
+      // Process deletions in parallel batches to speed up the process
+      const BATCH_SIZE = 5; // Process 5 deletions at a time to respect rate limits
+      
+      for (let i = 0; i < uniqueProductsToDelete.length; i += BATCH_SIZE) {
+        const batch = uniqueProductsToDelete.slice(i, i + BATCH_SIZE);
+        
+        logger.info(`[Product Cleanup] Processing deletion batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(uniqueProductsToDelete.length/BATCH_SIZE)} (${batch.length} products)`);
+        
+        // Process batch in parallel
+        const batchPromises = batch.map(async (product) => {
+          try {
+            const deleteResult = await shopifyApiLimiter(() => 
+              shopifyService.executeGraphQL(DELETE_PRODUCT, {
+                input: { id: product.productId }
+              })
+            );
+            
+            if (deleteResult.data?.productDelete?.userErrors?.length > 0) {
+              const errors = deleteResult.data.productDelete.userErrors;
+              const isAlreadyDeleted = errors.some(err => 
+                err.message.includes('Product does not exist') || 
+                err.message.includes('not found')
+              );
+              
+              if (isAlreadyDeleted) {
+                logger.info(`[Product Cleanup] Product already deleted: ${product.productId}`);
+                return { success: true, productId: product.productId };
+              } else {
+                logger.error(`[Product Cleanup] Error deleting product ${product.productId}:`, errors);
+                return { success: false, productId: product.productId, error: errors };
+              }
+            } else {
+              logger.info(`[Product Cleanup] Successfully deleted: ${product.title} (${product.productId})`);
+              return { success: true, productId: product.productId };
+            }
+          } catch (error) {
+            logger.error(`[Product Cleanup] Error deleting product ${product.productId}:`, error.message);
+            return { success: false, productId: product.productId, error: error.message };
+          }
+        });
+        
+        // Wait for batch to complete
+        const batchResults = await Promise.all(batchPromises);
+        
+        // Update stats based on results
+        batchResults.forEach(result => {
+          if (result.success) {
+            stats.productsDeleted++;
+          } else {
+            stats.errors++;
+          }
+        });
+        
+        // Small delay between batches to be extra careful with rate limits
+        if (i + BATCH_SIZE < uniqueProductsToDelete.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      logger.info(`[Product Cleanup] Cleanup completed. Deleted ${stats.productsDeleted} duplicate products, ${stats.errors} errors`);
+      
+      if (syncLogId) {
+        await dbService.updateSyncLog(syncLogId, {
+          message: `Cleanup completed. Deleted ${stats.productsDeleted} duplicate products`
+        });
+      }
+      
+      return stats;
+      
+    } catch (error) {
+      logger.error('[Product Cleanup] Error during cleanup:', error);
+      throw error;
+    }
   }
 }
 
