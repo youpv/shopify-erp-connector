@@ -1,7 +1,14 @@
-require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
-const { Pool } = require('pg');
+import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import pg from 'pg';
+import { fileURLToPath } from 'url';
+
+dotenv.config();
+
+const { Pool } = pg;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Create a new pool with the connection string
 const pool = new Pool({

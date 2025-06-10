@@ -6,8 +6,8 @@ export const config = {
   databaseUrl: process.env.DATABASE_URL || '',
   redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
   shopify: {
-    shop: process.env.SHOPIFY_SHOP,
-    version: process.env.SHOPIFY_API_VERSION || '2023-10',
-    token: process.env.SHOPIFY_ACCESS_TOKEN
+    shop: process.env.SHOPIFY_SHOP_HOST_NAME || process.env.SHOPIFY_SHOP,
+    version: process.env.SHOPIFY_API_VERSION || '2025-04',
+    token: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || process.env.SHOPIFY_ACCESS_TOKEN
   }
 };
