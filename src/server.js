@@ -1,27 +1,39 @@
 import express from 'express';
+import cors from 'cors';
 import { enqueueSync } from './productSync.js';
 import integrationRouter from './integrationRoutes.js';
 import { query } from './db.js';
 
 export function createServer() {
   const app = express();
+  
+  // Enable CORS for all routes
+  app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:3000'],
+    credentials: true
+  }));
+  
   app.use(express.json());
 
-  app.use('/configs', integrationRouter);
+  app.use('/api/products/configs', integrationRouter);
 
   app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-  app.post('/sync/:id', async (req, res) => {
+  app.post('/api/products/sync', async (req, res) => {
     try {
-      await enqueueSync(req.params.id);
-      res.json({ queued: true, configId: req.params.id });
+      const { configId } = req.body;
+      if (!configId) {
+        return res.status(400).json({ error: 'configId is required in request body' });
+      }
+      await enqueueSync(configId);
+      res.json({ queued: true, configId });
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
   });
 
   // Get sync logs for a specific config
-  app.get('/configs/:id/logs', async (req, res) => {
+  app.get('/api/products/configs/:id/logs', async (req, res) => {
     try {
       const { rows } = await query(
         `SELECT * FROM sync_logs 
@@ -53,7 +65,7 @@ export function createServer() {
   });
 
   // Get sync status
-  app.get('/sync/status', async (req, res) => {
+  app.get('/api/products/sync/status', async (req, res) => {
     try {
       const { rows: activeConfigs } = await query(
         `SELECT COUNT(DISTINCT config_id) as active_configs 
